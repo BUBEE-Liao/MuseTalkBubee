@@ -242,6 +242,7 @@ class Avatar:
         os.makedirs(self.avatar_path + '/tmp', exist_ok=True)
         print("start inference")
         ############################################## extract audio feature ##############################################
+        start_time_for_first_frame = time.time()
         start_time = time.time()
         start_time_audio = time.time()
         # Extract audio features
@@ -281,6 +282,9 @@ class Avatar:
                                     encoder_hidden_states=audio_feature_batch).sample
             pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
             recon = vae.decode_latents(pred_latents)
+            if i == 0:
+                first_frame_time = time.time()
+                print(f"Time from Whisper start to first frame: {first_frame_time - start_time_for_first_frame:.4f} seconds")
             for res_frame in recon:
                 res_frame_queue.put(res_frame)
         # Close the queue and sub-thread after all tasks are completed
