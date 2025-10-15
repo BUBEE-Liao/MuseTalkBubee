@@ -284,7 +284,7 @@ class Avatar:
             recon = vae.decode_latents(pred_latents)
             if i == 0:
                 first_frame_time = time.time()
-                print(f"Time from Whisper start to first frame: {first_frame_time - start_time_for_first_frame:.4f} seconds")
+                print(f"[TIMER] Time from Whisper start to first frame: {first_frame_time - start_time_for_first_frame:.4f} seconds", flush=True)
             for res_frame in recon:
                 res_frame_queue.put(res_frame)
         # Close the queue and sub-thread after all tasks are completed
