@@ -237,10 +237,13 @@ class Avatar:
 
     @torch.no_grad()
     def inference(self, audio_path, out_vid_name, fps, skip_save_images):
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
         os.makedirs(self.avatar_path + '/tmp', exist_ok=True)
         print("start inference")
         ############################################## extract audio feature ##############################################
         start_time = time.time()
+        start_time_audio = time.time()
         # Extract audio features
         whisper_input_features, librosa_length = audio_processor.get_audio_feature(audio_path, weight_dtype=weight_dtype)
         whisper_chunks = audio_processor.get_whisper_chunk(
@@ -253,7 +256,8 @@ class Avatar:
             audio_padding_length_left=args.audio_padding_length_left,
             audio_padding_length_right=args.audio_padding_length_right,
         )
-        print(f"processing audio:{audio_path} costs {(time.time() - start_time) * 1000}ms")
+        audio_processing_time = time.time() - start_time_audio
+        print(f"processing audio:{audio_path} costs {audio_processing_time * 1000}ms")
         ############################################## inference batch by batch ##############################################
         video_num = len(whisper_chunks)
         res_frame_queue = queue.Queue()
@@ -265,7 +269,7 @@ class Avatar:
         gen = datagen(whisper_chunks,
                      self.input_latent_list_cycle,
                      self.batch_size)
-        start_time = time.time()
+        start_time_video = time.time()
         res_frame_list = []
 
         for i, (whisper_batch, latent_batch) in enumerate(tqdm(gen, total=int(np.ceil(float(video_num) / self.batch_size)))):
@@ -282,16 +286,34 @@ class Avatar:
         # Close the queue and sub-thread after all tasks are completed
         process_thread.join()
 
+        video_processing_time = time.time() - start_time_video
+        print(f"processing video: costs {video_processing_time * 1000}ms")
+        print(f"audio + video : {audio_processing_time + video_processing_time}")
+
+        processing_time = time.time() - start_time
+        print('start evaluate time')
         if args.skip_save_images is True:
             print('Total process time of {} frames without saving images = {}s'.format(
                 video_num,
-                time.time() - start_time))
+                processing_time))
         else:
             print('Total process time of {} frames including saving images = {}s'.format(
                 video_num,
-                time.time() - start_time))
+                processing_time))
 
-        if out_vid_name is not None and args.skip_save_images is False:
+        # calculate RTF
+        audio_duration = librosa_length / audio_processor.feature_extractor.sampling_rate
+        rtf = processing_time / audio_duration
+        print(f"Audio duration: {audio_duration:.2f}s")
+        print(f"Real-Time Factor (RTF): {rtf:.4f}")
+
+        # get peak GPU memory
+        if torch.cuda.is_available():
+            peak_memory_bytes = torch.cuda.max_memory_allocated(device)
+            peak_memory_gb = peak_memory_bytes / (1024**3)
+            print(f"Peak GPU Memory Usage: {peak_memory_gb:.2f} GB")
+
+        if out_vid_name is not None and skip_save_images is False:
             # optional
             cmd_img2video = f"ffmpeg -y -v warning -r {fps} -f image2 -i {self.avatar_path}/tmp/%08d.png -vcodec libx264 -vf format=yuv420p -crf 18 {self.avatar_path}/temp.mp4"
             print(cmd_img2video)
@@ -401,6 +423,21 @@ if __name__ == "__main__":
             preparation=data_preparation)
 
         audio_clips = inference_config[avatar_id]["audio_clips"]
+
+        # Perform a warm-up run with the first audio clip to initialize CUDA
+        if audio_clips:
+            print("\n" + "="*20 + " WARM-UP RUN " + "="*20)
+            first_audio_num = next(iter(audio_clips))
+            first_audio_path = audio_clips[first_audio_num]
+            print("Performing a warm-up run with:", first_audio_path)
+            avatar.inference(
+                first_audio_path,
+                f"warmup_{first_audio_num}",
+                args.fps,
+                True  # Skip saving images for the warm-up
+            )
+            print("="*54 + "\n")
+
         for audio_num, audio_path in audio_clips.items():
             print("Inferring using:", audio_path)
             avatar.inference(audio_path,
